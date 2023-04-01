@@ -1,0 +1,17 @@
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.csproj.AssemblyReference.cache
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.GeneratedMSBuildEditorConfig.editorconfig
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.AssemblyInfoInputs.cache
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.AssemblyInfo.cs
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.csproj.CoreCompileInputs.cache
+/home/cjoy/src/sparse_mul_net/bin/Debug/net7.0/sparse_mul_net
+/home/cjoy/src/sparse_mul_net/bin/Debug/net7.0/sparse_mul_net.deps.json
+/home/cjoy/src/sparse_mul_net/bin/Debug/net7.0/sparse_mul_net.runtimeconfig.json
+/home/cjoy/src/sparse_mul_net/bin/Debug/net7.0/sparse_mul_net.dll
+/home/cjoy/src/sparse_mul_net/bin/Debug/net7.0/sparse_mul_net.pdb
+/home/cjoy/src/sparse_mul_net/bin/Debug/net7.0/ILGPU.dll
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.csproj.CopyComplete
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.dll
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/refint/sparse_mul_net.dll
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.pdb
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/sparse_mul_net.genruntimeconfig.cache
+/home/cjoy/src/sparse_mul_net/obj/Debug/net7.0/ref/sparse_mul_net.dll
