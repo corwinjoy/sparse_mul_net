@@ -42,17 +42,56 @@ namespace MatrixMultiplySparse
 
             var sanityMatrixP = new float[4, 3]
             {
-                {  1,   1,   0 },
-                {  1,   1,   0 },
-                {  0,   0,   0 },
-                {  0,   0,   0 },
+                {1, 1, 0},
+                {1, 1, 0},
+                {0, 0, 0},
+                {0, 0, 0},
+            };
+
+            var sanityResult = new float[4, 5]
+            {
+                {  49,      52,      55,      58,      61},
+                { 142,     151,     160,     169,     178},
+                {   0,       0,       0,       0,       0},
+                {   0,       0,       0,       0,       0},
             };
 
             var sanityMatrixBt = Utils.MatrixTranspose(sanityMatrixB);
 
-            var result = PABt(sanityMatrixP, sanityMatrixA, sanityMatrixBt);
+            var naiveResult = PABt(sanityMatrixP, sanityMatrixA, sanityMatrixBt);
+            Console.WriteLine("Naive implementation result");
+            Utils.PrintMatrix(naiveResult);
+            Debug.Assert(Utils.MatrixEqual(naiveResult, sanityResult));
 
-            Utils.PrintMatrix(result);
+            var simpleResult = PABt_sparse_simple(sanityMatrixP, sanityMatrixA, sanityMatrixBt);
+            Debug.Assert(Utils.MatrixEqual(simpleResult, sanityResult));
+            Console.WriteLine();
+            Console.WriteLine("----------------------------------------------------------------------------");
+            Console.WriteLine("Naive sparse result");
+            Utils.PrintMatrix(simpleResult);
+
+            var efficientResult = PABt_sparse_efficient(sanityMatrixP, sanityMatrixA, sanityMatrixBt);
+            Debug.Assert(Utils.MatrixEqual(simpleResult, sanityResult));
+            Console.WriteLine();
+            Console.WriteLine("----------------------------------------------------------------------------");
+            Console.WriteLine("Efficient sparse result");
+            Utils.PrintMatrix(efficientResult);
+
+            ///////////////////////////////////////////////////////////////////////////////////////////////////
+            // Accelerated implementations
+
+            var sanityMatrixSBt = SparseMatrix.Create(sanityMatrixBt);
+            using var context = Context.CreateDefault();
+            foreach (var device in context)
+            {
+                using var accelerator = device.CreateAccelerator(context);
+                var acceleratedResult = MatrixMultiplyAcceleratedSparse(accelerator, sanityMatrixP, sanityMatrixA, sanityMatrixSBt);
+                Debug.Assert(Utils.MatrixEqual(acceleratedResult, sanityResult));
+
+                Console.WriteLine("----------------------------------------------------------------------------");
+                Console.WriteLine($"- Accelerated sparse implementation on {accelerator}");
+                Utils.PrintMatrix(acceleratedResult);
+            }
 
             // Prepare random matrices
             /*
@@ -77,71 +116,75 @@ namespace MatrixMultiplySparse
         {
             var Bt = Utils.MatrixTranspose(B);
             var P_and_A = Utils.MatrixMask(A, P);
-            var result = MatrixMultiplyNaive(P_and_A, Bt);
+            var result = Utils.MatrixMultiplyNaive(P_and_A, Bt);
             return result;
         }
 
+
         /// <summary>
-        /// Performs matrix multiplication using each of the various implementations.
+        /// Compute (P&&A) * B'
+        /// Using Sparse Matrix routines
         /// </summary>
-        static void RunMatrixMultiply(float[,] a, float[,] b, float[,] expectedResult)
+        static float[,] PABt_sparse_simple(float[,] P, float[,] A, float[,] B)
         {
-            var m = a.GetLength(0);
-            var ka = a.GetLength(1);
-            var kb = b.GetLength(0);
-            var n = b.GetLength(1);
-
-            Console.WriteLine($"Running matrix multiplication on [{m}x{ka}] * [{kb}x{n}]");
-            var sw = new Stopwatch();
-
-            // Naive implementation
-            sw.Restart();
-            var naiveResult = MatrixMultiplyNaive(a, b);
-            sw.Stop();
-            Debug.Assert(Utils.MatrixEqual(naiveResult, expectedResult));
-            Console.WriteLine($"- Naive implementation: {sw.ElapsedMilliseconds}ms");
-
-            // Accelerated implementations
-            using var context = Context.CreateDefault();
-
-            foreach (var device in context)
-            {
-                using var accelerator = device.CreateAccelerator(context);
-
-                sw.Restart();
-                var acceleratedResult = MatrixMultiplyAccelerated(accelerator, a, b);
-                sw.Stop();
-                Debug.Assert(Utils.MatrixEqual(acceleratedResult, expectedResult));
-                Console.WriteLine($"- Accelerated implementation on {accelerator}: {sw.ElapsedMilliseconds}ms");
-
-                sw.Restart();
-                var acceleratedTiledResult = MatrixMultiplyTiled(accelerator, a, b);
-                sw.Stop();
-                Debug.Assert(Utils.MatrixEqual(acceleratedTiledResult, expectedResult));
-                Console.WriteLine($"- Tiled implementation on {accelerator}: {sw.ElapsedMilliseconds}ms");
-            }
+            var Bt = Utils.MatrixTranspose(B);
+            var SBt = SparseMatrix.Create(Bt);
+            var result = PABt_mult_simple(P, A, SBt);
+            return result;
         }
 
-        #endregion
 
-        #region Naive algorithm
+        // Compute (P&&A) * SBt  where SBt = sparse matrix
+        static float[,] PABt_mult_simple(float[,] P, float[,] A, SparseMatrix SBt) {
 
-        /// <summary>
-        /// Multiplies two dense matrices and returns the resultant matrix.
-        /// </summary>
-        /// <param name="accelerator">The Accelerator to run the multiplication on</param>
-        /// <param name="a">A dense MxK matrix</param>
-        /// <param name="b">A dense KxN matrix</param>
-        /// <returns>A dense MxN matrix</returns>
-        static float[,] MatrixMultiplyNaive(float[,] a,  float[,] b)
-        {
-            var m = a.GetLength(0);
-            var ka = a.GetLength(1);
-            var kb = b.GetLength(0);
-            var n = b.GetLength(1);
+            var m = A.GetLength(0);
+            var ka = A.GetLength(1);
+            var kb = SBt.NumRows;
+            var n = SBt.NumColumns;
 
             if (ka != kb)
-                throw new ArgumentException($"Cannot multiply {m}x{ka} matrix by {n}x{kb} matrix", nameof(b));
+                throw new ArgumentException($"Cannot multiply {m}x{ka} matrix by {n}x{kb} matrix", nameof(A));
+
+            var c = new float[m, n];
+            for (var x = 0; x < m; x++)
+            {
+                for (var y = 0; y < n; y++)
+                {
+                    c[x, y] = 0;
+                    for (var z = 0; z < ka; z++)
+                        c[x, y] += P[x,z] * A[x, z] * SBt[z, y];
+                }
+            }
+
+            return c;
+        }
+
+
+        // Compute (P&&A) * B'  where B = dense matrix
+        static float[,] PABt_sparse_efficient(float[,] P, float[,] A, float[,] B)
+        {
+            var SB = SparseMatrix.Create(B);
+            var result = PABt_mult_efficient(P, A, SB);
+            return result;
+        }
+
+
+        // Compute (P&&A) * SB'  where SB = sparse matrix
+        // This computes an implicit transpose for SB
+        // Uses dense matrix information to only multiply nonzero elements
+        static float[,] PABt_mult_efficient(float[,] P, float[,] A, SparseMatrix SB) {
+
+            var m = A.GetLength(0);
+            var ka = A.GetLength(1);
+            var kb = SB.NumColumns;
+            var n = SB.NumRows ;
+
+            int[,] neighbors = SB.neighbors;
+            int[] numNeighbors = SB.numNeighbors;
+            float[,] edgeWeights = SB.edgeWeights;
+
+            if (ka != kb)
+                throw new ArgumentException($"Cannot multiply {m}x{ka} matrix by {n}x{kb} matrix", nameof(A));
 
             var c = new float[m, n];
 
@@ -149,10 +192,13 @@ namespace MatrixMultiplySparse
             {
                 for (var y = 0; y < n; y++)
                 {
-                    c[x, y] = 0;
-
-                    for (var z = 0; z < ka; z++)
-                        c[x, y] += a[x, z] * b[z, y];
+                    float dot = 0;
+                    int nonZero = numNeighbors[y];  // implicit transpose, array stored row-wise
+                    for (var z = 0; z < nonZero; z++) {
+                        int colIdx = neighbors[y, z];
+                        dot += P[x, colIdx] * A[x, colIdx] * edgeWeights[y, z];
+                    }
+                    c[x, y] = dot;
                 }
             }
 
@@ -161,158 +207,106 @@ namespace MatrixMultiplySparse
 
         #endregion
 
+        
         #region Accelerated algorithm
 
         /// <summary>
         /// Multiplies two dense matrices and returns the resultant matrix.
         /// </summary>
         /// <param name="accelerator">The Accelerator to run the multiplication on</param>
-        /// <param name="a">A dense MxK matrix</param>
-        /// <param name="b">A dense KxN matrix</param>
+        /// <param name="P">A dense MxK MASK matrix</param>
+        /// <param name="A">A dense MxK matrix</param>
+        /// <param name="SB">A sparse NxK matrix</param>
         /// <returns>A dense MxN matrix</returns>
-        static float[,] MatrixMultiplyAccelerated(Accelerator accelerator, float[,] a, float[,] b)
+        static float[,] MatrixMultiplyAcceleratedSparse(Accelerator accelerator, float[,] P, float[,] A,  SparseMatrix SB)
         {
-            var m = a.GetLength(0);
-            var ka = a.GetLength(1);
-            var kb = b.GetLength(0);
-            var n = b.GetLength(1);
+            var m = A.GetLength(0);
+            var ka = A.GetLength(1);
+            var kb = SB.NumColumns;
+            var n = SB.NumRows;
+
+            int[,] neighbors = SB.neighbors;
+            int[] numNeighbors = SB.numNeighbors;
+            float[,] edgeWeights = SB.edgeWeights;
+
 
             if (ka != kb)
-                throw new ArgumentException($"Cannot multiply {m}x{ka} matrix by {n}x{kb} matrix", nameof(b));
+                throw new ArgumentException($"Cannot multiply {m}x{ka} matrix by {n}x{kb} matrix", nameof(A));
 
             var kernel = accelerator.LoadAutoGroupedStreamKernel<
                 Index2D,
                 ArrayView2D<float, Stride2D.DenseX>,
                 ArrayView2D<float, Stride2D.DenseX>,
+                ArrayView2D<int, Stride2D.DenseX>,
+                ArrayView1D<int, Stride1D.Dense>,
+                ArrayView2D<float, Stride2D.DenseX>,
                 ArrayView2D<float, Stride2D.DenseX>>(
-                MatrixMultiplyAcceleratedKernel);
+                MatrixMultiplyAcceleratedKernelSparse);
 
+            using var pBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(m, ka));
             using var aBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(m, ka));
-            using var bBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(ka, n));
-            using var cBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(m, n));
-            aBuffer.CopyFromCPU(a);
-            bBuffer.CopyFromCPU(b);
+            using var outBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(m, n));
 
-            kernel(cBuffer.Extent.ToIntIndex(), aBuffer.View, bBuffer.View, cBuffer.View);
+            using var neighborsBuffer = accelerator.Allocate2DDenseX<int>(new Index2D(neighbors.GetLength(0), neighbors.GetLength(1)));
+            using var numNeighborsBuffer = accelerator.Allocate1D<int>(neighbors.GetLength(0));
+            using var edgeWeightsBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(edgeWeights.GetLength(0), edgeWeights.GetLength(1)));
+            
+            
+            pBuffer.CopyFromCPU(P);
+            aBuffer.CopyFromCPU(A);
+            
+            // Sparse matrix SB members
+            neighborsBuffer.CopyFromCPU(neighbors);
+            numNeighborsBuffer.CopyFromCPU(numNeighbors);
+            edgeWeightsBuffer.CopyFromCPU(edgeWeights);
+
+            kernel(outBuffer.Extent.ToIntIndex(), pBuffer.View, aBuffer.View, 
+                neighborsBuffer.View, numNeighborsBuffer.View, edgeWeightsBuffer.View,
+                outBuffer.View);
 
             // Reads data from the GPU buffer into a new CPU array.
             // Implicitly calls accelerator.DefaultStream.Synchronize() to ensure
             // that the kernel and memory copy are completed first.
-            return cBuffer.GetAsArray2D();
+            return outBuffer.GetAsArray2D();
         }
+
 
         /// <summary>
         /// The matrix multiplication kernel that runs on the accelerated device.
         /// </summary>
         /// <param name="index">Current matrix index</param>
+        /// <param name="pView">An input matrix MASK of size MxK</param>
         /// <param name="aView">An input matrix of size MxK</param>
-        /// <param name="bView">An input matrix of size KxN</param>
+        /// <param name="neighborsView"> B.neighbors member: A sparse matrix B of size NxK (will transpose)</param>
+        /// <param name="numNeighborsView"> B.numNeighborsView member: A sparse matrix B of size NxK (will transpose)</param>
+        /// <param name="edgeWeightsView"> B.edgeWeightsView member: A sparse matrix B of size NxK (will transpose)</param>
         /// <param name="cView">An output matrix of size MxN</param>
-        static void MatrixMultiplyAcceleratedKernel(
+        /// Uses dense matrix information to only multiply nonzero elements
+        static void MatrixMultiplyAcceleratedKernelSparse(
             Index2D index,
+            ArrayView2D<float, Stride2D.DenseX> pView,
             ArrayView2D<float, Stride2D.DenseX> aView,
-            ArrayView2D<float, Stride2D.DenseX> bView,
-            ArrayView2D<float, Stride2D.DenseX> cView)
+            ArrayView2D<int, Stride2D.DenseX> neighborsView,
+            ArrayView1D<int, Stride1D.Dense> numNeighborsView,
+            ArrayView2D<float, Stride2D.DenseX> edgeWeightsView,
+            ArrayView2D<float, Stride2D.DenseX> outView)
         {
             var x = index.X;
             var y = index.Y;
-            var sum = 0.0f;
+            float dot = 0.0f;
 
-            for (var i = 0; i < aView.IntExtent.Y; i++)
-                sum += aView[new Index2D(x, i)] * bView[new Index2D(i, y)];
-
-            cView[index] = sum;
-        }
-
-        #endregion
-
-        #region Tiled algorithm
-
-        /// <summary>
-        /// Size of the tile (NxN).
-        /// </summary>
-        const int TILE_SIZE = 2;
-
-        /// <summary>
-        /// Multiplies two dense matrices and returns the resultant matrix (using tiling).
-        /// </summary>
-        /// <param name="accelerator">The Accelerator to run the multiplication on</param>
-        /// <param name="a">A dense MxK matrix</param>
-        /// <param name="b">A dense KxN matrix</param>
-        /// <returns>A dense MxN matrix</returns>
-        static float[,] MatrixMultiplyTiled(Accelerator accelerator, float[,] a, float[,] b)
-        {
-            var m = a.GetLength(0);
-            var ka = a.GetLength(1);
-            var kb = b.GetLength(0);
-            var n = b.GetLength(1);
-
-            if (ka != kb)
-                throw new ArgumentException($"Cannot multiply {m}x{ka} matrix by {n}x{kb} matrix", nameof(b));
-
-            var kernel = accelerator.LoadStreamKernel<
-                ArrayView2D<float, Stride2D.DenseX>,
-                ArrayView2D<float, Stride2D.DenseX>,
-                ArrayView2D<float, Stride2D.DenseX>>(
-                MatrixMultiplyTiledKernel);
-            var groupSize = new Index2D(TILE_SIZE, TILE_SIZE);
-            var numGroups = new Index2D((m + TILE_SIZE - 1) / TILE_SIZE, (n + TILE_SIZE - 1) / TILE_SIZE);
-
-            using var aBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(m, ka));
-            using var bBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(ka, n));
-            using var cBuffer = accelerator.Allocate2DDenseX<float>(new Index2D(m, n));
-            aBuffer.CopyFromCPU(a);
-            bBuffer.CopyFromCPU(b);
-
-            kernel((numGroups, groupSize), aBuffer, bBuffer, cBuffer);
-
-            // Reads data from the GPU buffer into a new CPU array.
-            // Implicitly calls accelerator.DefaultStream.Synchronize() to ensure
-            // that the kernel and memory copy are completed first.
-            return cBuffer.GetAsArray2D();
-        }
-
-        /// <summary>
-        /// The tiled matrix multiplication kernel that runs on the accelerated device.
-        /// </summary>
-        /// <param name="aView">An input matrix of size MxK</param>
-        /// <param name="bView">An input matrix of size KxN</param>
-        /// <param name="cView">An output matrix of size MxN</param>
-        static void MatrixMultiplyTiledKernel(
-            ArrayView2D<float, Stride2D.DenseX> aView,
-            ArrayView2D<float, Stride2D.DenseX> bView,
-            ArrayView2D<float, Stride2D.DenseX> cView)
-        {
-            var global = Grid.GlobalIndex.XY;
-            var x = Group.IdxX;
-            var y = Group.IdxY;
-
-            var aTile = SharedMemory.Allocate2D<float, Stride2D.DenseX>(new Index2D(TILE_SIZE, TILE_SIZE), new Stride2D.DenseX(TILE_SIZE));
-            var bTile = SharedMemory.Allocate2D<float, Stride2D.DenseX>(new Index2D(TILE_SIZE, TILE_SIZE), new Stride2D.DenseX(TILE_SIZE));
-            var sum = 0.0f;
-
-            for (var i = 0; i < aView.IntExtent.X; i += TILE_SIZE)
-            {
-                if (global.X < aView.IntExtent.X && y + i < aView.IntExtent.Y)
-                    aTile[x, y] = aView[global.X, y + i];
-                else
-                    aTile[x, y] = 0;
-
-                if (x + i < bView.IntExtent.X && global.Y < bView.IntExtent.Y)
-                    bTile[x, y] = bView[x + i, global.Y];
-                else
-                    bTile[x, y] = 0;
-                Group.Barrier();
-
-                for (var k = 0; k < TILE_SIZE; k++)
-                    sum += aTile[new Index2D(x, k)] * bTile[new Index2D(k, y)];
-                Group.Barrier();
+            // implicit transpose of B, array stored row-wise
+            int nonZero = numNeighborsView[y];  
+            for (var z = 0; z < nonZero; z++) {
+                int colIdx = neighborsView[y, z];
+                dot += pView[x, colIdx] * aView[x, colIdx] * edgeWeightsView[y, z];
             }
-
-            if (global.X < cView.IntExtent.X && global.Y < cView.IntExtent.Y)
-                cView[global] = sum;
+            outView[index] = dot;
         }
 
+
         #endregion
+
+       
     }
 }

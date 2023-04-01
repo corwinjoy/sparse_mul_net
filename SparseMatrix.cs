@@ -71,7 +71,7 @@ namespace MatrixMultiplySparse
         /// <summary>
         /// Weights for each entry in neighbors.
         /// </summary>
-        private readonly float[,] edgeWeights;
+        public float[,] edgeWeights {get;}
 
         /// <summary>
         /// Constructs a sparse matrix of a dense matrix.
