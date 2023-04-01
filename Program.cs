@@ -211,7 +211,7 @@ namespace MatrixMultiplySparse
         #region Accelerated algorithm
 
         /// <summary>
-        /// Multiplies two dense matrices and returns the resultant matrix.
+        /// Compute (P&&A) * SB'  where SB = sparse matrix.
         /// </summary>
         /// <param name="accelerator">The Accelerator to run the multiplication on</param>
         /// <param name="P">A dense MxK MASK matrix</param>
